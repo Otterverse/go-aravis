@@ -4,7 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"image"
-	"image/jpeg"
+	"image/png"
 	"log"
 	"net/http"
 	"time"
@@ -15,14 +15,15 @@ import (
 var exposureTime float64
 var gain float64
 
-func serveJPEG(camera aravis.Camera) http.Handler {
+func servePNG(camera aravis.Camera) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		maxWidth, maxHeight, _ := camera.GetSensorSize()
+		camera.UVSetUSBMode(aravis.USB_MODE_ASYNC)
 		camera.SetRegion(0, 0, maxWidth, maxHeight)
 		camera.SetExposureTimeAuto(aravis.AUTO_OFF)
 		camera.SetExposureTime(exposureTime)
 		camera.SetGain(gain)
-		camera.SetFrameRate(3.75)
+		//camera.SetFrameRate(3.75)
 		camera.SetAcquisitionMode(aravis.ACQUISITION_MODE_SINGLE_FRAME)
 		size, _ := camera.GetPayloadSize()
 		_, _, width, height, _ := camera.GetRegion()
@@ -47,24 +48,27 @@ func serveJPEG(camera aravis.Camera) http.Handler {
 
 		buffer, err = stream.TimeoutPopBuffer(time.Second)
 		if s, _ := buffer.GetStatus(); s != aravis.BUFFER_STATUS_SUCCESS {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, "buffer error", http.StatusInternalServerError)
+			return
 		}
 		data, err := buffer.GetData()
 
-		// Image is in red-green bayer format
-		img := aravis.NewBayerRG(
+		img := image.NewGray(
 			image.Rectangle{image.Point{0, 0}, image.Point{width, height}},
 		)
 		img.Pix = data
 
-		// Write JPEG to client
-		jpeg.Encode(w, img, nil)
+		// Write PNG to client
+		err = png.Encode(w, img)
+		if err != nil {
+			log.Println(err)
+		}
 	})
 }
 
 func init() {
 	flag.Float64Var(&exposureTime, "e", 10000, "Exposure time (in us)")
-	flag.Float64Var(&gain, "g", 0, "Gain (in dB)")
+	flag.Float64Var(&gain, "g", 16, "Gain (in dB)")
 }
 
 func main() {
@@ -90,8 +94,9 @@ func main() {
 		camera, _ := aravis.NewCamera(name)
 		defer camera.Close()
 
-		http.Handle(fmt.Sprintf("/%d.jpg", i), serveJPEG(camera))
+		http.Handle(fmt.Sprintf("/%d.png", i), servePNG(camera))
 	}
 
+	log.Println("Listening...")
 	log.Fatal(http.ListenAndServe(":8000", nil))
 }
